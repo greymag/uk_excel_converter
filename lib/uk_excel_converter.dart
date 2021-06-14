@@ -4,6 +4,7 @@ import 'package:excel/excel.dart';
 import 'package:in_date_utils/in_date_utils.dart';
 import 'package:list_ext/list_ext.dart';
 import 'package:path/path.dart' as p;
+import 'package:meta/meta.dart';
 
 const _titlePrefix = 'Начисления на лицевые счета';
 const _lsPrefix = 'л/с №';
@@ -84,19 +85,21 @@ Future<void> convert(
   final bytes = File(filePath).readAsBytesSync();
   final original = Excel.decodeBytes(bytes);
 
-  final originaName = p.basename(filePath);
+  final originalName = p.basename(filePath);
   final source = original.tables.values.first;
 
   final lsMap = await loadLsMap(lsMapFilePath);
   final ls2ProviderMap = await loadLs2ProviderMap(providersMapFilePath);
 
   // Исходящие
-  final out = _OutExporter(originaName);
+  final out = _OutExporter(originalName);
   // Начисления
-  final bills = _BillsExporter(originaName, lsMap, ls2ProviderMap);
+  final bills = _BillsExporter(originalName, lsMap, ls2ProviderMap);
   // Начисления - Пени
   final billsPeni =
-      _BillsExporter(originaName, lsMap, ls2ProviderMap, peni: true);
+      _BillsExporter(originalName, lsMap, ls2ProviderMap, peni: true);
+  // Оплата
+  final pay = _PayExporter(originalName);
 
   DateTime? month;
   var service = _defaultService;
@@ -136,6 +139,9 @@ Future<void> convert(
       bills.append(lsNum, month, service, row[3]?.value);
       // Начисления - Пени
       billsPeni.append(lsNum, month, service, row[4]?.value);
+      // Оплата
+      pay.append(
+          lsNum, month, service, row[5]?.value as num?, row[6]?.value as num?);
     } else {
       service = _serviceMap[first] ?? _defaultService;
     }
@@ -145,6 +151,7 @@ Future<void> convert(
     out.save(outputDirPath),
     bills.save(outputDirPath),
     billsPeni.save(outputDirPath),
+    pay.save(outputDirPath),
   ]);
 
   print('Данные записаны в файлы:\n${res.map((f) => f.path).join('\n')}');
@@ -215,12 +222,12 @@ int? _getInt(Data? data) {
   throw ArgumentError.value(val);
 }
 
-String _date(DateTime value) =>
-    '${_num(value.day)}.${_num(value.month)}.${_num(value.year, 4)}';
+String _date(DateTime value, [String joint = '.']) =>
+    '${_num(value.day)}$joint${_num(value.month)}$joint${_num(value.year, 4)}';
 String _num(int value, [int digits = 2]) =>
     value.toString().padLeft(digits, '0');
 
-class _OutExporter extends _Exporter {
+class _OutExporter extends _ExcelExporter {
   _OutExporter(String originalName) : super('Исх', originalName);
 
   @override
@@ -245,7 +252,7 @@ class _OutExporter extends _Exporter {
   }
 }
 
-class _BillsExporter extends _Exporter {
+class _BillsExporter extends _ExcelExporter {
   final Map<int, int> lsMap;
   final Map<int, int> providersMap;
 
@@ -272,25 +279,77 @@ class _BillsExporter extends _Exporter {
   }
 }
 
+class _PayExporter extends _Exporter {
+  final buffer = StringBuffer();
+
+  _PayExporter(String originalName) : super('Опл', originalName, 'txt');
+
+  @override
+  void appendHeaders() {}
+
+  void append(int lsNum, DateTime month, int service, num? amount, num? peni) {
+    if (amount == null && peni == null) return;
+
+    // 27-е число
+    final date = DateUtils.copyWith(month, day: 27);
+    appendRow([
+      _date(date, '-'),
+      lsNum,
+      _amount(amount ?? 0),
+      _amount(peni ?? 0),
+      service
+    ]);
+  }
+
+  @override
+  void appendRow(List<Object> row) {
+    buffer.writeln(row.join(';'));
+  }
+
+  @override
+  Future<void> writeToFile(File file) => file.writeAsString(buffer.toString());
+}
+
+abstract class _ExcelExporter extends _Exporter {
+  late final Excel excel;
+
+  _ExcelExporter(String prefix, String originalName)
+      : excel = Excel.createExcel(),
+        super(prefix, originalName, 'xlsx') {
+    appendHeaders();
+  }
+
+  @override
+  void appendRow(List<Object> row) => excel.sheets.values.first.appendRow(row);
+
+  @override
+  @protected
+  Future<void> writeToFile(File file) => file.writeAsBytes(excel.save()!);
+}
+
 abstract class _Exporter {
   final String prefix;
   final String originalName;
+  final String ext;
 
-  late final Excel excel;
-
-  _Exporter(this.prefix, this.originalName) {
-    excel = Excel.createExcel();
+  _Exporter(this.prefix, this.originalName, this.ext) {
     appendHeaders();
   }
 
   void appendHeaders();
 
   Future<File> save(String outputDir) async {
-    final targetPath = p.join(outputDir, '$prefix$originalName');
+    final targetPath =
+        p.join(outputDir, p.setExtension('$prefix$originalName', '.$ext'));
     final file = File(targetPath);
-    await file.writeAsBytes(excel.save()!);
+    await writeToFile(file);
     return file;
   }
 
-  void appendRow(List<Object> row) => excel.sheets.values.first.appendRow(row);
+  void appendRow(List<Object> row);
+
+  @protected
+  Future<void> writeToFile(File file);
 }
+
+String _amount(num value) => value.toString().replaceAll('.', ',');
