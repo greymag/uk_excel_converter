@@ -321,9 +321,7 @@ abstract class _ExcelExporter extends _Exporter {
 
   _ExcelExporter(String prefix, String originalName)
       : excel = Excel.createExcel(),
-        super(prefix, originalName, 'xlsx') {
-    appendHeaders();
-  }
+        super(prefix, originalName, 'xlsx');
 
   @override
   void appendRow(List<Object> row) => excel.sheets.values.first.appendRow(row);
