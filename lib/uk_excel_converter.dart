@@ -132,6 +132,12 @@ Future<void> convert(
     if (first.startsWith(_lsPrefix)) {
       final lsNum = int.parse(first.replaceFirst(_lsPrefix, ''));
 
+      // Игнорим ЛС, которых нет в мапе
+      if (!lsMap.containsKey(lsNum)) {
+        print('Пропускаем ЛС $lsNum');
+        continue;
+      }
+
       // Исходящие
       out.append(
           lsNum, month, service, row[7]?.value as num?, row[8]?.value as num?);
