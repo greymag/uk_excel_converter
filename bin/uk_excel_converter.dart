@@ -6,5 +6,14 @@ void main(List<String> arguments) async {
   // '/Volumes/MacbookExt/projects/dart/uk_excel_converter/Соответствие услуг.xlsx');
   final input =
       '/Volumes/MacbookExt/projects/dart/uk_excel_converter/Октябрь 2020.xlsx';
-  await convert(input, p.dirname(input));
+  final lsMapFilePath =
+      '/Volumes/MacbookExt/projects/dart/uk_excel_converter/Соответствие ЛС и СЧЕТА.xlsx';
+  final providersMapFilePath =
+      '/Volumes/MacbookExt/projects/dart/uk_excel_converter/Номер поставщика для КАП_РЕМОНТА ВСЕ.xlsx';
+  await convert(
+    input,
+    p.dirname(input),
+    lsMapFilePath: lsMapFilePath,
+    providersMapFilePath: providersMapFilePath,
+  );
 }

@@ -25,6 +25,9 @@ const _typeValue = 0;
 const _typePeni = 2;
 const _defaultService = 3201;
 
+const _servicesForProvidersMap = {201, 299};
+const _defaultProvider = 451;
+
 final _monthRegEx =
     RegExp('за (.*) ([0-9]{4}) г\.', caseSensitive: false, unicode: true);
 final _serviceMap = <String, int>{
@@ -72,13 +75,28 @@ final _serviceMap = <String, int>{
   'Установка пластиковых окон': 3274,
 };
 
-Future<void> convert(String filePath, String outputDirPath) async {
+Future<void> convert(
+  String filePath,
+  String outputDirPath, {
+  required String lsMapFilePath,
+  required String providersMapFilePath,
+}) async {
   final bytes = File(filePath).readAsBytesSync();
   final original = Excel.decodeBytes(bytes);
 
   final originaName = p.basename(filePath);
   final source = original.tables.values.first;
+
+  final lsMap = await loadLsMap(lsMapFilePath);
+  final ls2ProviderMap = await loadLs2ProviderMap(providersMapFilePath);
+
+  // Исходящие
   final out = _OutExporter(originaName);
+  // Начисления
+  final bills = _BillsExporter(originaName, lsMap, ls2ProviderMap);
+  // Начисления - Пени
+  final billsPeni =
+      _BillsExporter(originaName, lsMap, ls2ProviderMap, peni: true);
 
   DateTime? month;
   var service = _defaultService;
@@ -110,23 +128,14 @@ Future<void> convert(String filePath, String outputDirPath) async {
 
     if (first.startsWith(_lsPrefix)) {
       final lsNum = int.parse(first.replaceFirst(_lsPrefix, ''));
-      final date = _date(DateUtils.firstDayOfNextMonth(month));
-      final dDate = _date(month);
 
-      final res = [lsNum, date, dDate, service];
-
-      final value = row[7]?.value as num?;
-      final peni = row[8]?.value as num?;
-
-      if (value != null) {
-        final r = res.copyWith(value)..add(_typeValue);
-        out.appendRow(r);
-      }
-
-      if (peni != null) {
-        final r = res.copyWith(peni)..add(_typePeni);
-        out.appendRow(r);
-      }
+      // Исходящие
+      out.append(
+          lsNum, month, service, row[7]?.value as num?, row[8]?.value as num?);
+      // Начисления
+      bills.append(lsNum, month, service, row[3]?.value);
+      // Начисления - Пени
+      billsPeni.append(lsNum, month, service, row[4]?.value);
     } else {
       service = _serviceMap[first] ?? _defaultService;
     }
@@ -134,6 +143,8 @@ Future<void> convert(String filePath, String outputDirPath) async {
 
   final res = await Future.wait([
     out.save(outputDirPath),
+    bills.save(outputDirPath),
+    billsPeni.save(outputDirPath),
   ]);
 
   print('Данные записаны в файлы:\n${res.map((f) => f.path).join('\n')}');
@@ -149,13 +160,59 @@ void loadServiceMapFromExcel(String filePath) {
 
   for (final row in source.rows) {
     final key = row.first?.value as String?;
-    final value = row[1]?.value;
+    final value = _getInt(row[1]);
 
-    if (key != null && value != null && value is int) {
-      print("'$key': $value,");
+    if (key != null && value != null) {
+      // print("'$key': $value,");
       _serviceMap[key] = value;
     }
   }
+}
+
+Future<Map<int, int>> loadLsMap(String filePath) async {
+  final map = <int, int>{};
+  final bytes = File(filePath).readAsBytesSync();
+  final original = Excel.decodeBytes(bytes);
+
+  final source = original.tables.values.first;
+
+  for (final row in source.rows) {
+    final key = _getInt(row[1]);
+    final value = _getInt(row[0]);
+
+    if (key != null && value != null) {
+      map[key] = value;
+    }
+  }
+
+  return map;
+}
+
+Future<Map<int, int>> loadLs2ProviderMap(String filePath) async {
+  final map = <int, int>{};
+  final bytes = File(filePath).readAsBytesSync();
+  final original = Excel.decodeBytes(bytes);
+
+  final source = original.tables.values.first;
+
+  for (final row in source.rows) {
+    final key = _getInt(row[0]);
+    final value = _getInt(row[1]);
+    if (key != null && value != null) {
+      map[key] = value;
+    }
+  }
+
+  return map;
+}
+
+int? _getInt(Data? data) {
+  final val = data?.value;
+  if (val == null) return null;
+  if (val is int) return val;
+  if (val is double) return val.toInt();
+  if (val is String) return int.tryParse(val);
+  throw ArgumentError.value(val);
 }
 
 String _date(DateTime value) =>
@@ -163,15 +220,55 @@ String _date(DateTime value) =>
 String _num(int value, [int digits = 2]) =>
     value.toString().padLeft(digits, '0');
 
-// const prefix = 'Исх';
-// final targetPath = p.join(p.dirname(input), '$prefix${p.basename(input)}');
-
 class _OutExporter extends _Exporter {
   _OutExporter(String originalName) : super('Исх', originalName);
 
   @override
   void appendHeaders() {
     appendRow(['LS', 'MONTH', 'D_MONTH', 'CD_SRV', 'S_SALDO', 'TIP']);
+  }
+
+  void append(int lsNum, DateTime month, int service, num? value, num? peni) {
+    final date = _date(DateUtils.firstDayOfNextMonth(month));
+    final dDate = _date(month);
+    final res = [lsNum, date, dDate, service];
+
+    if (value != null) {
+      final r = res.copyWith(value)..add(_typeValue);
+      appendRow(r);
+    }
+
+    if (peni != null) {
+      final r = res.copyWith(peni)..add(_typePeni);
+      appendRow(r);
+    }
+  }
+}
+
+class _BillsExporter extends _Exporter {
+  final Map<int, int> lsMap;
+  final Map<int, int> providersMap;
+
+  _BillsExporter(String originalName, this.lsMap, this.providersMap,
+      {bool peni = false})
+      : super(peni ? 'НачПени' : 'Нач', originalName);
+
+  @override
+  void appendHeaders() {
+    appendRow(['Счет', 'Месяц расчета', 'Номер услуги', 'Сумма', 'Поставщик']);
+  }
+
+  void append(int lsNum, DateTime month, int service, num? amount) {
+    if (amount == null || !lsMap.containsKey(lsNum)) return;
+
+    final resLsNum = lsMap[lsNum]!;
+    final date = month.toIso8601String().replaceAll('T', ' ');
+    final provider = _servicesForProvidersMap.contains(service)
+        ? providersMap[lsNum]
+        : _defaultProvider;
+    if (provider == null) return;
+
+    appendRow([resLsNum, date, service, amount, provider]);
   }
 }
 
