@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:excel/excel.dart';
 import 'package:in_date_utils/in_date_utils.dart';
 import 'package:list_ext/list_ext.dart';
+import 'package:path/path.dart' as p;
 
 const _titlePrefix = 'Начисления на лицевые счета';
 const _lsPrefix = 'л/с №';
@@ -71,16 +72,13 @@ final _serviceMap = <String, int>{
   'Установка пластиковых окон': 3274,
 };
 
-Future<File> convert(String filePath, String targetPath) async {
+Future<void> convert(String filePath, String outputDirPath) async {
   final bytes = File(filePath).readAsBytesSync();
   final original = Excel.decodeBytes(bytes);
 
+  final originaName = p.basename(filePath);
   final source = original.tables.values.first;
-
-  final res = Excel.createExcel();
-  final sheet = res.sheets.values.first;
-
-  sheet.appendRow(['LS', 'MONTH', 'D_MONTH', 'CD_SRV', 'S_SALDO', 'TIP']);
+  final out = _OutExporter(originaName);
 
   DateTime? month;
   var service = _defaultService;
@@ -122,21 +120,23 @@ Future<File> convert(String filePath, String targetPath) async {
 
       if (value != null) {
         final r = res.copyWith(value)..add(_typeValue);
-        sheet.appendRow(r);
+        out.appendRow(r);
       }
 
       if (peni != null) {
         final r = res.copyWith(peni)..add(_typePeni);
-        sheet.appendRow(r);
+        out.appendRow(r);
       }
     } else {
       service = _serviceMap[first] ?? _defaultService;
     }
   }
 
-  final file = File(targetPath);
-  await file.writeAsBytes(res.save()!);
-  return file;
+  final res = await Future.wait([
+    out.save(outputDirPath),
+  ]);
+
+  print('Данные записаны в файлы:\n${res.map((f) => f.path).join('\n')}');
 }
 
 void loadServiceMapFromExcel(String filePath) {
@@ -162,3 +162,38 @@ String _date(DateTime value) =>
     '${_num(value.day)}.${_num(value.month)}.${_num(value.year, 4)}';
 String _num(int value, [int digits = 2]) =>
     value.toString().padLeft(digits, '0');
+
+// const prefix = 'Исх';
+// final targetPath = p.join(p.dirname(input), '$prefix${p.basename(input)}');
+
+class _OutExporter extends _Exporter {
+  _OutExporter(String originalName) : super('Исх', originalName);
+
+  @override
+  void appendHeaders() {
+    appendRow(['LS', 'MONTH', 'D_MONTH', 'CD_SRV', 'S_SALDO', 'TIP']);
+  }
+}
+
+abstract class _Exporter {
+  final String prefix;
+  final String originalName;
+
+  late final Excel excel;
+
+  _Exporter(this.prefix, this.originalName) {
+    excel = Excel.createExcel();
+    appendHeaders();
+  }
+
+  void appendHeaders();
+
+  Future<File> save(String outputDir) async {
+    final targetPath = p.join(outputDir, '$prefix$originalName');
+    final file = File(targetPath);
+    await file.writeAsBytes(excel.save()!);
+    return file;
+  }
+
+  void appendRow(List<Object> row) => excel.sheets.values.first.appendRow(row);
+}
